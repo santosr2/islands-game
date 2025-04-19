@@ -11,9 +11,24 @@ defmodule IslandsEngine.Game do
     GenServer.start_link(__MODULE__, name, name: via_tuple(name))
 
   def init(name) do
-    player1 = %{name: name, board: Board.new(), guesses: Guesses.new()}
-    player2 = %{name: nil, board: Board.new(), guesses: Guesses.new()}
-    {:ok, %{player1: player1, player2: player2, rules: %Rules{}}, @timeout}
+    # A potential race condition exists here.
+    # Game processes are registered by name in the Registry, allowing other
+    # processes to send messages using a :via tuple. However, messages can
+    # arrive before the process is fully initialized or after a crash, but
+    # before the state is properly restored. This creates a chance for a
+    # message to be processed out of order, ahead of the :set_state message
+    # during a restart.
+    #
+    # In this game, the risk is low due to the limited number of messages
+    # sent to a single game process. Additionally, the state machine provides
+    # some protection. When init/1 sets the initial state, the game starts
+    # in the :initialized state. In this state, only specific actions, like
+    # adding a player, are allowed. Any other actions will return an error,
+    # effectively delaying those messages and allowing the :set_state message
+    # to move closer to the front of the mailbox. While not a perfect solution,
+    # this reduces the likelihood of issues.
+    send(self(), {:set_state, name})
+    {:ok, fresh_state(state_data)}
   end
 
   def add_player(game, name) when is_binary(name), do:
@@ -98,6 +113,16 @@ defmodule IslandsEngine.Game do
   def handle_info(:timeout, state_data), do:
     {:stop, {:shutdown, :timeout}, state_data}
 
+  def handle_info({:set_state, name}, _state_data) do
+    state_data =
+      case :ets.lookup(:game_state, name) do
+        [] -> fresh_state(name)
+        [{_key, state}] -> state
+      end
+    :ets.insert(:game_state, {name, state_data})
+    {:noreply, state_data, @timeout}
+  end
+
   def position_island(game, player, key, row, col) when player in @players, do:
     GenServer.call(game, {:position_island, player, key, row, col})
 
@@ -115,8 +140,10 @@ defmodule IslandsEngine.Game do
   defp update_rules(state_data, rules), do:
     %{state_data | rules: rules}
 
-  defp reply_success(state_data, reply), do:
+  defp reply_success(state_data, reply) do
+    :ets.insert(:game_state, {state_data.player1.name, state_data})
     {:reply, reply, state_data, @timeout}
+  end
 
   defp player_board(state_data, player), do:
     Map.get(state_data, player).board
@@ -131,5 +158,11 @@ defmodule IslandsEngine.Game do
     update_in(state_data[player_key].guesses, fn guesses ->
       Guesses.add(guesses, hit_or_miss, coordinate)
     end)
+  end
+
+  defp fresh_state(name) do
+    player1 = %{name, name, board: Board.new(), guesses: Guesses.new()}
+    player2 = %{name: nil, board: Board.new(), guesses: Guesses.new()}
+    %{player1: player1, player2: player2, rules: %Rules{}}
   end
 end
