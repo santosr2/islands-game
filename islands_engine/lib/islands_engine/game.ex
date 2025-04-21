@@ -28,7 +28,7 @@ defmodule IslandsEngine.Game do
     # to move closer to the front of the mailbox. While not a perfect solution,
     # this reduces the likelihood of issues.
     send(self(), {:set_state, name})
-    {:ok, fresh_state(state_data)}
+    {:ok, fresh_state(name)}
   end
 
   def add_player(game, name) when is_binary(name), do:
@@ -161,7 +161,7 @@ defmodule IslandsEngine.Game do
   end
 
   defp fresh_state(name) do
-    player1 = %{name, name, board: Board.new(), guesses: Guesses.new()}
+    player1 = %{name: name, board: Board.new(), guesses: Guesses.new()}
     player2 = %{name: nil, board: Board.new(), guesses: Guesses.new()}
     %{player1: player1, player2: player2, rules: %Rules{}}
   end
